@@ -19,10 +19,10 @@ is_tests_build := $(filter tests,$(MAKECMDGOALS))
 # The filter part means "only eval the copy-one-file rule if this
 # src:dest pair is the first one to match the same dest"
 #$(1): the src:dest pair
-define check-product-copy-files
-$(if $(filter %.apk, $(1)),$(error \
-    Prebuilt apk found in PRODUCT_COPY_FILES: $(1), use BUILD_PREBUILT instead!))
-endef
+#define check-product-copy-files
+#$(if $(filter %.apk, $(1)),$(error \
+#    Prebuilt apk found in PRODUCT_COPY_FILES: $(1), use BUILD_PREBUILT instead!))
+#endef
 # filter out the duplicate <source file>:<dest file> pairs.
 unique_product_copy_files_pairs :=
 $(foreach cf,$(PRODUCT_COPY_FILES), \
@@ -1040,7 +1040,14 @@ built_ota_tools := \
 	$(call intermediates-dir-for,EXECUTABLES,check_prereq)/check_prereq \
 	$(call intermediates-dir-for,EXECUTABLES,sqlite3)/sqlite3 \
 	$(call intermediates-dir-for,EXECUTABLES,updater)/updater
+	
+uboot_ota := \
+    $(PRODUCT_OUT)/bootloader \
+    $(PRODUCT_OUT)/bootloader.fex \
+    $(PRODUCT_OUT)/env.fex
+
 $(BUILT_TARGET_FILES_PACKAGE): PRIVATE_OTA_TOOLS := $(built_ota_tools)
+$(BUILT_TARGET_FILES_PACKAGE): PRIVATE_OTA_UBOOT := $(uboot_ota)
 
 $(BUILT_TARGET_FILES_PACKAGE): PRIVATE_RECOVERY_API_VERSION := $(RECOVERY_API_VERSION)
 
@@ -1121,6 +1128,7 @@ endif
 	$(hide) mkdir -p $(zip_root)/OTA/bin
 	$(hide) $(ACP) $(INSTALLED_ANDROID_INFO_TXT_TARGET) $(zip_root)/OTA/
 	$(hide) $(ACP) $(PRIVATE_OTA_TOOLS) $(zip_root)/OTA/bin/
+	$(hide) $(ACP) -r $(PRIVATE_OTA_UBOOT) $(zip_root)/
 	@# Files that do not end up in any images, but are necessary to
 	@# build them.
 	$(hide) mkdir -p $(zip_root)/META
@@ -1182,6 +1190,31 @@ $(INTERNAL_OTA_PACKAGE_TARGET): $(BUILT_TARGET_FILES_PACKAGE) $(DISTTOOLS)
 
 .PHONY: otapackage
 otapackage: $(INTERNAL_OTA_PACKAGE_TARGET)
+
+
+# -----------------------------------------------------------------
+# OTA update package from old_target_files.zip
+
+name := $(TARGET_PRODUCT)
+ifeq ($(TARGET_BUILD_TYPE),debug)
+  name := $(name)_debug
+endif
+name := $(name)-ota-$(FILE_NAME_TAG)-inc
+
+INTERNAL_OTA_PACKAGE_TARGET_INC := $(PRODUCT_OUT)/$(name).zip
+
+$(INTERNAL_OTA_PACKAGE_TARGET_INC): KEY_CERT_PAIR := $(DEFAULT_KEY_CERT_PAIR)
+
+$(INTERNAL_OTA_PACKAGE_TARGET_INC): $(BUILT_TARGET_FILES_PACKAGE) $(OTATOOLS)
+	@echo "Package OTA: $@"
+	$(hide) ./build/tools/releasetools/ota_from_target_files -v \
+	   -p $(HOST_OUT) \
+           -k $(KEY_CERT_PAIR) \
+			-i ./old_target_files.zip \
+           $(BUILT_TARGET_FILES_PACKAGE) $@
+
+.PHONY: otapackage_inc
+otapackage_inc: $(INTERNAL_OTA_PACKAGE_TARGET_INC)
 
 # -----------------------------------------------------------------
 # The update package

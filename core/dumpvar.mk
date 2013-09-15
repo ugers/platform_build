@@ -82,6 +82,11 @@ endif
 
 endif # CALLED_FROM_SETUP
 
+#ifneq ($(OUT)/root, /root)
+#$(shell  if [ -d $(OUT)/root ]; then rm -rf $(OUT)/root; fi)
+#$(shell  if [ -d $(OUT)/recovery ]; then rm -rf $(OUT)/recovery; fi)
+#$(shell  if [ -f $(OUT)/system/build.prop ]; then rm $(OUT)/system/build.prop; fi)
+#endif
 
 ifneq ($(PRINT_BUILD_CONFIG),)
 HOST_OS_EXTRA:=$(shell python -c "import platform; print(platform.platform())")

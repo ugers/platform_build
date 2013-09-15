@@ -297,7 +297,13 @@ def GetBootableImage(name, prebuilt_name, unpack_dir, tree_subdir,
                                          os.path.join(unpack_dir, fs_config),
                                          info_dict))
 
-
+def GetUbootFex(name,path):
+    print "  building fex from target_files %s..." %(path)
+    fex=open(path)
+    data=fex.read()
+    fex.close()
+    return File(name,data)
+  
 def UnzipTemp(filename, pattern=None):
   """Unzip the given archive into a temporary directory and return the name.
 
@@ -866,7 +872,7 @@ def ComputeDifferences(diffs):
 
 # map recovery.fstab's fs_types to mount/format "partition types"
 PARTITION_TYPES = { "yaffs2": "MTD", "mtd": "MTD",
-                    "ext4": "EMMC", "emmc": "EMMC" }
+                    "ext4": "EMMC", "emmc": "EMMC","vfat": "EMMC" }
 
 def GetTypeAndDevice(mount_point, info):
   fstab = info["fstab"]

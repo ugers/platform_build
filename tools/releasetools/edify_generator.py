@@ -208,6 +208,10 @@ class EdifyGenerator(object):
       else:
         raise ValueError("don't know how to write \"%s\" partitions" % (p.fs_type,))
 
+  def WriteRawFex(self,mount_point,fn):
+     self.script.append(
+       'package_extract_file("%s","%s");'%(fn,mount_point))
+
   def SetPermissions(self, fn, uid, gid, mode):
     """Set file ownership and permissions."""
     self.script.append('set_perm(%d, %d, 0%o, "%s");' % (uid, gid, mode, fn))

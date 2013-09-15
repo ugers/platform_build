@@ -424,6 +424,12 @@ def WriteFullOTAPackage(input_zip, output_zip):
 
   script.ShowProgress(0.2, 10)
   script.WriteRawImage("/boot", "boot.img")
+    
+  print("pack uboot to OTA package...")
+  script.Print("Update uboot...")
+  bootloader_fex = common.GetUbootFex("bootloader.fex",OPTIONS.target_tmp+str("/bootloader.fex"))
+  common.ZipWriteStr(output_zip, "bootloader.fex", bootloader_fex.data)
+  script.WriteRawFex("/dev/block/bootloader", "bootloader.fex")
 
   script.ShowProgress(0.1, 0)
   device_specific.FullOTA_InstallEnd()
@@ -457,6 +463,18 @@ def LoadSystemFiles(z):
       data = z.read(info.filename)
       out[fn] = common.File(fn, data)
   return out
+
+def LoadBootfsFiles(z):
+   """Load all the files from bootloader/... in a given target-files
+   ZipFile, and return a dict of {filename: File object}."""
+   out = {}
+   for info in z.infolist():
+     if info.filename.startswith("bootloader/") and not IsSymlink(info):
+        if info.filename.startswith("bootloader/vendor"):
+           continue
+        data = z.read(info.filename)
+        out[info.filename] = common.File(info.filename,data)
+   return out
 
 
 def GetBuildProp(prop, info_dict):
@@ -497,6 +515,9 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
   target_data = LoadSystemFiles(target_zip)
   print "Loading source..."
   source_data = LoadSystemFiles(source_zip)
+  print "Loading bootfs..."
+  target_bootfs_data = LoadBootfsFiles(target_zip)
+  source_bootfs_data = LoadBootfsFiles(source_zip)
 
   verbatim_targets = []
   patch_list = []
@@ -521,6 +542,22 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
       # Target file identical to source.
       pass
 
+  verbatim_targets_bf = []
+  for bfn in sorted(target_bootfs_data.keys()):
+     tbf = target_bootfs_data[bfn]
+     assert bfn == tbf.name
+     sbf = source_bootfs_data.get(bfn,None)
+
+     if sbf is None: 
+       tbf.AddToZip(output_zip)
+       verbatim_targets_bf.append((bfn,tbf.size))
+     elif tbf.sha1 != sbf.sha1:
+       diffs.append(common.Difference(tbf,sbf))
+     else:
+       pass
+ 
+
+
   common.ComputeDifferences(diffs)
 
   for diff in diffs:
@@ -540,6 +577,7 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
   metadata["post-build"] = target_fp
 
   script.Mount("/system")
+  script.Mount("/bootloader")
   script.AssertSomeFingerprint(source_fp, target_fp)
 
   source_boot = common.GetBootableImage(
@@ -555,6 +593,10 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
   target_recovery = common.GetBootableImage(
       "/tmp/recovery.img", "recovery.img", OPTIONS.target_tmp, "RECOVERY")
   updating_recovery = (source_recovery.data != target_recovery.data)
+  
+  source_env = common.GetUbootFex("env.fex",OPTIONS.source_tmp+str("/env.fex"))
+  target_env = common.GetUbootFex("env.fex",OPTIONS.target_tmp+str("/env.fex"))
+  updating_env = (source_env.data != target_env.data)
 
   # Here's how we divide up the progress bar:
   #  0.1 for verifying the start state (PatchCheck calls)
@@ -573,6 +615,8 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
   total_verify_size = float(sum([i[2].size for i in patch_list]) + 1)
   if updating_boot:
     total_verify_size += source_boot.size
+  if updating_env:
+    total_verify_size += source_env.size
   so_far = 0
 
   for fn, tf, sf, size, patch_sha in patch_list:
@@ -596,7 +640,24 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
                        target_boot.size, target_boot.sha1))
     so_far += source_boot.size
     script.SetProgress(so_far / total_verify_size)
+    
+  if updating_env:
+    d = common.Difference(target_env,source_env)
+    _, _, d = d.ComputePatch()
+    print "env   target:%d  source: %d  diff:%d" %(
+        target_env.size,source_env.size,len(d))
 
+    common.ZipWriteStr(output_zip,"patch/env.fex.p",d)
+
+    env_type, env_device = common.GetTypeAndDevice("/env",OPTIONS.info_dict)
+
+    script.PatchCheck("%s:%s:%d:%s:%d:%s" % 
+                      (env_type,env_device,
+                       source_env.size,source_env.sha1,
+                       target_env.size,target_env.sha1))
+    so_far +=source_env.size
+    script.SetProgress(so_far / total_verify_size)
+    
   if patch_list or updating_recovery or updating_boot:
     script.CacheFreeSpaceCheck(largest_source_size)
 
@@ -614,15 +675,18 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
   script.DeleteFiles(["/"+i[0] for i in verbatim_targets] +
                      ["/"+i for i in sorted(source_data)
                             if i not in target_data] +
+                     ["/"+i[0] for i in verbatim_targets_bf] +
                      ["/system/recovery.img"])
 
   script.ShowProgress(0.8, 0)
   total_patch_size = float(sum([i[1].size for i in patch_list]) + 1)
   if updating_boot:
     total_patch_size += target_boot.size
+  if updating_env:
+    total_patch_size += target_env.size
   so_far = 0
 
-  script.Print("Patching system files...")
+  script.Print("Patching system or bootfs files...")
   deferred_patch_list = []
   for item in patch_list:
     fn, tf, sf, size, _ = item
@@ -650,6 +714,24 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
     print "boot image changed; including."
   else:
     print "boot image unchanged; skipping."
+    
+  if updating_env:
+    # Produce the env fex by applying a patch to the current
+    # contents of the env partition, and write it back to the
+    # partition.
+    script.Print("Patching env fex...")
+    script.ApplyPatch("%s:%s:%d:%s:%d:%s"
+                      % (env_type, env_device,
+                         source_env.size, source_env.sha1,
+                         target_env.size, target_env.sha1),
+                      "-",
+                      target_env.size, target_env.sha1,
+                      source_env.sha1, "patch/env.fex.p")
+    so_far += target_env.size
+    script.SetProgress(so_far / total_patch_size)
+    print "env fex changed; including."
+  else:
+    print "env fex unchanged; skipping." 
 
   if updating_recovery:
     # Recovery is generated as a patch using both the boot image
@@ -695,6 +777,10 @@ def WriteIncrementalOTAPackage(target_zip, source_zip, output_zip):
   if verbatim_targets:
     script.Print("Unpacking new files...")
     script.UnpackPackageDir("system", "/system")
+  
+  if verbatim_targets_bf:
+    script.UnpackPackageDir("bootloader", "/bootloader")
+
 
   if updating_recovery:
     script.Print("Unpacking new recovery...")

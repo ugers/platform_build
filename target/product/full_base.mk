@@ -26,8 +26,8 @@ PRODUCT_PACKAGES := \
     libWnnEngDic \
     libWnnJpnDic \
     libwnndict \
-    VideoEditor \
-    WAPPushManager
+    WAPPushManager\
+	#VideoEditor
 
 PRODUCT_PACKAGES += \
     Galaxy4 \
